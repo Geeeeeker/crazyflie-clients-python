@@ -117,21 +117,27 @@ jobs:
 
       - name: Build executable (Windows)
         if: runner.os == 'Windows'
-        shell: bash
+        shell: pwsh
         run: |
           cd cfclient
-          ADD_DATA="--add-data bin;bin --add-data src;src"
-          if [ -d "lib" ]; then ADD_DATA="$ADD_DATA --add-data lib;lib"; fi
-          if [ -d "resources" ]; then ADD_DATA="$ADD_DATA --add-data resources;resources"; fi
-          python -m PyInstaller --onefile --name cfclient.exe $ADD_DATA --hidden-import PyQt5.sip "bin/cfclient"
+          $addData = @("--add-data", "bin;bin", "--add-data", "src;src")
+          if (Test-Path "lib") { $addData += "--add-data", "lib;lib" }
+          if (Test-Path "resources") { $addData += "--add-data", "resources;resources" }
+          $pyInstallerArgs = @(
+            "--onefile", "--name", "cfclient.exe",
+            "--hidden-import", "PyQt5.sip",
+            "--"
+          ) + $addData + @("bin/cfclient")
+          python -m PyInstaller $pyInstallerArgs
           cd dist
-          if [ -f cfclient.exe ]; then
-            zip cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip cfclient.exe
-            echo "ARTIFACT_PATH=$(pwd)/cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip" >> $GITHUB_ENV
-          else
-            echo "Build failed: cfclient.exe not found"
+          if (Test-Path cfclient.exe) {
+            Compress-Archive -Path cfclient.exe -DestinationPath cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip
+            $artifact_path = Resolve-Path cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip
+            echo "ARTIFACT_PATH=$artifact_path" | Out-File -FilePath $env:GITHUB_ENV -Append
+          } else {
+            Write-Error "cfclient.exe not found"
             exit 1
-          fi
+          }
 
       - name: Upload artifact (AMD64)
         uses: actions/upload-artifact@v4
