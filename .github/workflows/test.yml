@@ -103,17 +103,18 @@ jobs:
 
       - name: Build executable (Windows)
         if: matrix.os == 'windows-latest'
-        shell: pwsh
+        shell: bash
         run: |
           cd cfclient
-          $ADD_DATA = "--add-data bin;bin --add-data src;src"
-          if (Test-Path "lib") { $ADD_DATA += " --add-data lib;lib" }
-          if (Test-Path "resources") { $ADD_DATA += " --add-data resources;resources" }
-          pyinstaller --onefile --name cfclient.exe $ADD_DATA --hidden-import PyQt5.sip bin\cfclient
+          ADD_DATA="--add-data bin;bin --add-data src;src"
+          if [ -d "lib" ]; then ADD_DATA="$ADD_DATA --add-data lib;lib"; fi
+          if [ -d "resources" ]; then ADD_DATA="$ADD_DATA --add-data resources;resources"; fi
+          # 使用正斜杠并加引号防止路径被拆分
+          pyinstaller --onefile --name cfclient.exe $ADD_DATA --hidden-import PyQt5.sip "bin/cfclient"
           cd dist
-          Compress-Archive -Path cfclient.exe -DestinationPath cfclient-windows.zip
-          $artifact_path = Resolve-Path cfclient-windows.zip
-          echo "artifact_path=$artifact_path" >> $env:GITHUB_OUTPUT
+          # 使用 zip 命令（Git Bash 自带）代替 Compress-Archive
+          zip -r cfclient-windows.zip cfclient.exe
+          echo "artifact_path=$(pwd)/cfclient-windows.zip" >> $GITHUB_OUTPUT
 
       - name: Upload client artifact
         uses: actions/upload-artifact@v4
