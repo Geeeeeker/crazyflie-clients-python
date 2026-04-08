@@ -12,33 +12,78 @@ on:
         required: true
         default: true
         type: boolean
-      build_amd64:
-        description: 'Build for amd64 (x86_64)'
-        required: true
-        default: true
-        type: boolean
-      build_arm64:
-        description: 'Build for arm64 (Apple Silicon / Linux ARM)'
-        required: true
-        default: false
-        type: boolean
+      build_arch:
+        description: 'Architecture(s) for Linux (comma-separated: amd64,arm64,arm,i386)'
+        required: false
+        default: 'amd64,arm64'
 
 jobs:
-  build_amd64:
-    if: inputs.build_amd64 == true
+  # ==================== Linux 多架构构建（使用 QEMU + Docker） ====================
+  build_linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: ${{ fromJson(format('[{0}]', inputs.build_arch)) }}
+    steps:
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: all
+
+      - name: Checkout cfclient
+        uses: actions/checkout@v4
+        with:
+          repository: leeebo/crazyflie-clients-python
+          ref: master
+          path: cfclient
+          submodules: 'recursive'
+
+      - name: Checkout crazyflie-lib-python
+        uses: actions/checkout@v4
+        with:
+          repository: leeebo/crazyflie-lib-python
+          ref: master
+          path: crazyflie-lib-python
+
+      - name: Build for Linux ${{ matrix.arch }}
+        run: |
+          ARCH=${{ matrix.arch }}
+          docker run --rm --platform linux/${ARCH} \
+            -v $(pwd):/work \
+            -w /work \
+            python:3.11-slim \
+            bash -c "
+              apt-get update && apt-get install -y binutils libgl1-mesa-glx python3-pyqt5
+              pip install -e ./crazyflie-lib-python
+              if [ -f ./cfclient/requirements.txt ]; then pip install -r ./cfclient/requirements.txt; else pip install -e ./cfclient; fi
+              pip install pyinstaller
+              cd cfclient
+              ADD_DATA='--add-data bin:bin --add-data src:src --collect-data cfclient'
+              [ -d lib ] && ADD_DATA=\"\$ADD_DATA --add-data lib:lib\"
+              [ -d resources ] && ADD_DATA=\"\$ADD_DATA --add-data resources:resources\"
+              pyinstaller --onefile --name cfclient \$ADD_DATA --hidden-import PyQt5.sip bin/cfclient
+              cd dist
+              zip cfclient-linux-${ARCH}.zip cfclient
+            "
+          mkdir -p artifacts
+          cp cfclient/dist/cfclient-linux-${ARCH}.zip artifacts/ || true
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cfclient_linux_${{ matrix.arch }}_${{ github.run_number }}
+          path: artifacts/cfclient-linux-*.zip
+
+  # ==================== macOS 双架构（Intel + Apple Silicon） ====================
+  build_macos:
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
-            platform: linux
+          - runner: macos-13        # Intel
             arch: amd64
-          - os: macos-13
-            platform: macos
-            arch: amd64
-          - os: windows-latest
-            platform: windows
-            arch: amd64
-    runs-on: ${{ matrix.os }}
+          - runner: macos-latest    # Apple Silicon
+            arch: arm64
     steps:
       - name: Checkout cfclient
         uses: actions/checkout@v4
@@ -60,173 +105,84 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install system deps (Linux)
-        if: runner.os == 'Linux'
+      - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-pyqt5 python3-pyqt5.qtsvg libgl1
-
-      - name: Install system deps (macOS)
-        if: runner.os == 'macOS'
-        run: brew install pyqt5
-
-      - name: Install Python packages (Unix)
-        if: runner.os != 'Windows'
-        run: |
+          brew install pyqt5
           pip install -e ./crazyflie-lib-python
-          if [ -f ./cfclient/requirements.txt ]; then
-            pip install -r ./cfclient/requirements.txt
-          else
-            pip install -e ./cfclient
-          fi
+          if [ -f ./cfclient/requirements.txt ]; then pip install -r ./cfclient/requirements.txt; else pip install -e ./cfclient; fi
           pip install pyinstaller
 
-      - name: Install Python packages (Windows)
-        if: runner.os == 'Windows'
+      - name: Build for macOS ${{ matrix.arch }}
+        run: |
+          cd cfclient
+          ADD_DATA="--add-data bin:bin --add-data src:src --collect-data cfclient"
+          [ -d "lib" ] && ADD_DATA="$ADD_DATA --add-data lib:lib"
+          [ -d "resources" ] && ADD_DATA="$ADD_DATA --add-data resources:resources"
+          pyinstaller --onefile --windowed --name cfclient $ADD_DATA --hidden-import PyQt5.sip bin/cfclient
+          cd dist
+          zip -r cfclient-macos-${{ matrix.arch }}.zip cfclient.app
+          echo "ARTIFACT_PATH=$(pwd)/cfclient-macos-${{ matrix.arch }}.zip" >> $GITHUB_ENV
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cfclient_macos_${{ matrix.arch }}_${{ github.run_number }}
+          path: ${{ env.ARTIFACT_PATH }}
+
+  # ==================== Windows 仅 amd64 ====================
+  build_windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout cfclient
+        uses: actions/checkout@v4
+        with:
+          repository: leeebo/crazyflie-clients-python
+          ref: master
+          path: cfclient
+          submodules: 'recursive'
+
+      - name: Checkout crazyflie-lib-python
+        uses: actions/checkout@v4
+        with:
+          repository: leeebo/crazyflie-lib-python
+          ref: master
+          path: crazyflie-lib-python
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
         shell: bash
         run: |
           pip install -e ./crazyflie-lib-python
-          if [ -f ./cfclient/requirements.txt ]; then
-            pip install -r ./cfclient/requirements.txt
-          else
-            pip install -e ./cfclient
-          fi
+          if [ -f ./cfclient/requirements.txt ]; then pip install -r ./cfclient/requirements.txt; else pip install -e ./cfclient; fi
           pip install pyinstaller
 
-      - name: Build executable (Linux)
-        if: runner.os == 'Linux'
+      - name: Build for Windows amd64
+        shell: pwsh
         run: |
           cd cfclient
-          ADD_DATA="--add-data bin:bin --add-data src:src"
-          [ -d "lib" ] && ADD_DATA="$ADD_DATA --add-data lib:lib"
-          [ -d "resources" ] && ADD_DATA="$ADD_DATA --add-data resources:resources"
-          pyinstaller --onefile --name cfclient $ADD_DATA --hidden-import PyQt5.sip bin/cfclient
-          cd dist && zip cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip cfclient
-          echo "ARTIFACT_PATH=$(pwd)/cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip" >> $GITHUB_ENV
-
-      - name: Build executable (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          cd cfclient
-          ADD_DATA="--add-data bin:bin --add-data src:src"
-          [ -d "lib" ] && ADD_DATA="$ADD_DATA --add-data lib:lib"
-          [ -d "resources" ] && ADD_DATA="$ADD_DATA --add-data resources:resources"
-          pyinstaller --onefile --windowed --name cfclient $ADD_DATA --hidden-import PyQt5.sip bin/cfclient
-          cd dist && zip -r cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip cfclient.app
-          echo "ARTIFACT_PATH=$(pwd)/cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip" >> $GITHUB_ENV
-
-      - name: Build executable (Windows)
-        if: runner.os == 'Windows'
-        shell: cmd
-        run: |
-          cd cfclient
-          set ADD_DATA=--add-data bin;bin --add-data src;src
-          if exist lib set ADD_DATA=%ADD_DATA% --add-data lib;lib
-          if exist resources set ADD_DATA=%ADD_DATA% --add-data resources;resources
-          python -m PyInstaller --onefile --name cfclient.exe %ADD_DATA% --hidden-import PyQt5.sip bin/cfclient
+          $ADD_DATA = "--add-data bin;bin --add-data src;src --collect-data cfclient"
+          if (Test-Path "lib") { $ADD_DATA += " --add-data lib;lib" }
+          if (Test-Path "resources") { $ADD_DATA += " --add-data resources;resources" }
+          pyinstaller --onefile --name cfclient.exe $ADD_DATA --hidden-import PyQt5.sip bin\cfclient
           cd dist
-          if exist cfclient.exe (
-            echo Creating zip using 7z...
-            "C:\Program Files\7-Zip\7z.exe" a -tzip cfclient-windows-amd64.zip cfclient.exe
-            echo ARTIFACT_PATH=%cd%\cfclient-windows-amd64.zip>> %GITHUB_ENV%
-          ) else (
-            echo cfclient.exe not found
-            exit 1
-          )
+          Compress-Archive -Path cfclient.exe -DestinationPath cfclient-windows-amd64.zip
+          $artifact_path = Resolve-Path cfclient-windows-amd64.zip
+          echo "ARTIFACT_PATH=$artifact_path" >> $env:GITHUB_ENV
 
-      - name: Upload artifact (AMD64)
+      - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cfclient_${{ matrix.platform }}_${{ matrix.arch }}_${{ github.run_number }}
+          name: cfclient_windows_amd64_${{ github.run_number }}
           path: ${{ env.ARTIFACT_PATH }}
-          if-no-files-found: error
 
-  build_arm64:
-    if: inputs.build_arm64 == true
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-24.04-arm
-            platform: linux
-            arch: arm64
-          - os: macos-latest
-            platform: macos
-            arch: arm64
-    runs-on: ${{ matrix.os }}
-    continue-on-error: true
-    steps:
-      - name: Checkout cfclient
-        uses: actions/checkout@v4
-        with:
-          repository: leeebo/crazyflie-clients-python
-          ref: master
-          path: cfclient
-          submodules: 'recursive'
-
-      - name: Checkout crazyflie-lib-python
-        uses: actions/checkout@v4
-        with:
-          repository: leeebo/crazyflie-lib-python
-          ref: master
-          path: crazyflie-lib-python
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install system deps (Linux ARM)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-pyqt5 python3-pyqt5.qtsvg libgl1
-
-      - name: Install system deps (macOS ARM)
-        if: runner.os == 'macOS'
-        run: brew install pyqt5
-
-      - name: Install Python packages
-        run: |
-          pip install -e ./crazyflie-lib-python
-          if [ -f ./cfclient/requirements.txt ]; then
-            pip install -r ./cfclient/requirements.txt
-          else
-            pip install -e ./cfclient
-          fi
-          pip install pyinstaller
-
-      - name: Build executable (Linux ARM)
-        if: runner.os == 'Linux'
-        run: |
-          cd cfclient
-          ADD_DATA="--add-data bin:bin --add-data src:src"
-          [ -d "lib" ] && ADD_DATA="$ADD_DATA --add-data lib:lib"
-          [ -d "resources" ] && ADD_DATA="$ADD_DATA --add-data resources:resources"
-          pyinstaller --onefile --name cfclient $ADD_DATA --hidden-import PyQt5.sip bin/cfclient
-          cd dist && zip cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip cfclient
-          echo "ARTIFACT_PATH=$(pwd)/cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip" >> $GITHUB_ENV
-
-      - name: Build executable (macOS ARM)
-        if: runner.os == 'macOS'
-        run: |
-          cd cfclient
-          ADD_DATA="--add-data bin:bin --add-data src:src"
-          [ -d "lib" ] && ADD_DATA="$ADD_DATA --add-data lib:lib"
-          [ -d "resources" ] && ADD_DATA="$ADD_DATA --add-data resources:resources"
-          pyinstaller --onefile --windowed --name cfclient $ADD_DATA --hidden-import PyQt5.sip bin/cfclient
-          cd dist && zip -r cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip cfclient.app
-          echo "ARTIFACT_PATH=$(pwd)/cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip" >> $GITHUB_ENV
-
-      - name: Upload artifact (ARM64)
-        uses: actions/upload-artifact@v4
-        with:
-          name: cfclient_${{ matrix.platform }}_${{ matrix.arch }}_${{ github.run_number }}
-          path: ${{ env.ARTIFACT_PATH }}
-          if-no-files-found: error
-
+  # ==================== 发布到 Release ====================
   release:
     runs-on: ubuntu-latest
-    needs: [build_amd64, build_arm64]
+    needs: [build_linux, build_macos, build_windows]
     if: inputs.create_release == true
     permissions:
       contents: write
@@ -235,6 +191,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -242,11 +199,16 @@ jobs:
           name: "ESP-Drone Client ${{ inputs.release_tag || github.run_number }}"
           body: |
             ## PC Client Downloads
-            - **Linux amd64**: cfclient_linux_amd64_*.zip
-            - **Linux arm64**: cfclient_linux_arm64_*.zip (if built)
-            - **macOS Intel**: cfclient_macos_amd64_*.zip
-            - **macOS Apple Silicon**: cfclient_macos_arm64_*.zip
-            - **Windows amd64**: cfclient_windows_amd64_*.zip
+            ### Linux
+            - amd64: cfclient_linux_amd64_*.zip
+            - arm64: cfclient_linux_arm64_*.zip
+            - arm: cfclient_linux_arm_*.zip (if built)
+            - i386: cfclient_linux_i386_*.zip (if built)
+            ### macOS
+            - Intel (amd64): cfclient_macos_amd64_*.zip
+            - Apple Silicon (arm64): cfclient_macos_arm64_*.zip
+            ### Windows
+            - amd64: cfclient_windows_amd64_*.zip
           files: artifacts/**/*.zip
           draft: false
           prerelease: false
