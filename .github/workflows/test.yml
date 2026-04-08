@@ -68,11 +68,59 @@ jobs:
             echo '{"version": "dev"}' > src/cfclient/version.json
           fi
 
+      - name: Patch __init__.py for PyInstaller
+        run: |
+          cd cfclient
+          cat > patch_init.py << 'EOF'
+          import os, re, sys
+          target = "src/cfclient/__init__.py"
+          with open(target, 'r') as f:
+              content = f.read()
+
+          # 1. 修改 frozen 分支中的 module_path 定义
+          old_assign = r'(\s*else:\s*\n\s*)(module_path = os\.path\.join\(os\.path\.dirname\(sys\.executable\), \'lib\', \'cfclient\'\))'
+          new_assign = r'\1if hasattr(sys, \'_MEIPASS\'):\n        module_path = sys._MEIPASS\n    else:\n        module_path = os.path.join(os.path.dirname(sys.executable), \'lib\', \'cfclient\')'
+          content = re.sub(old_assign, new_assign, content, flags=re.MULTILINE)
+
+          # 2. 替换 version.json 的读取逻辑
+          helper = '''
+          def _get_version_json_path():
+              import sys, os
+              if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+                  # Try root of _MEIPASS first (added by --add-data)
+                  root_path = os.path.join(sys._MEIPASS, 'version.json')
+                  if os.path.exists(root_path):
+                      return root_path
+                  # Fallback to the original module_path (for compatibility)
+              return os.path.join(module_path, 'version.json')
+          '''
+          if '_get_version_json_path' not in content:
+              # Insert after imports
+              lines = content.splitlines(keepends=True)
+              insert_pos = 0
+              for i, line in enumerate(lines):
+                  if line.startswith('import ') or line.startswith('from '):
+                      insert_pos = i + 1
+                      break
+              lines.insert(insert_pos, helper)
+              content = ''.join(lines)
+
+          # Replace the actual open call
+          content = content.replace('with open(os.path.join(module_path, "version.json")) as f:',
+                                    'with open(_get_version_json_path()) as f:')
+
+          with open(target, 'w') as f:
+              f.write(content)
+          print("Patched", target)
+          EOF
+          python3 patch_init.py
+
       - name: Build for Linux ${{ matrix.arch }}
         run: |
           cd cfclient
+          # Prepare data: add version.json to root of _MEIPASS
           ADD_DATA="--add-data bin:bin --add-data src:src --collect-data cfclient"
-          [ -d "lib" ] && ADD_DATA="$ADD_DATA --add-data lib:lib"
+          ADD_DATA="$ADD_DATA --add-data src/cfclient/version.json:version.json"
           [ -d "resources" ] && ADD_DATA="$ADD_DATA --add-data resources:resources"
           pyinstaller --onefile --name cfclient $ADD_DATA --hidden-import PyQt5.sip bin/cfclient
           cd dist
@@ -135,11 +183,48 @@ jobs:
             echo '{"version": "dev"}' > src/cfclient/version.json
           fi
 
+      - name: Patch __init__.py for PyInstaller
+        run: |
+          cd cfclient
+          cat > patch_init.py << 'EOF'
+          import os, re, sys
+          target = "src/cfclient/__init__.py"
+          with open(target, 'r') as f:
+              content = f.read()
+          old_assign = r'(\s*else:\s*\n\s*)(module_path = os\.path\.join\(os\.path\.dirname\(sys\.executable\), \'lib\', \'cfclient\'\))'
+          new_assign = r'\1if hasattr(sys, \'_MEIPASS\'):\n        module_path = sys._MEIPASS\n    else:\n        module_path = os.path.join(os.path.dirname(sys.executable), \'lib\', \'cfclient\')'
+          content = re.sub(old_assign, new_assign, content, flags=re.MULTILINE)
+          helper = '''
+          def _get_version_json_path():
+              import sys, os
+              if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+                  root_path = os.path.join(sys._MEIPASS, 'version.json')
+                  if os.path.exists(root_path):
+                      return root_path
+              return os.path.join(module_path, 'version.json')
+          '''
+          if '_get_version_json_path' not in content:
+              lines = content.splitlines(keepends=True)
+              insert_pos = 0
+              for i, line in enumerate(lines):
+                  if line.startswith('import ') or line.startswith('from '):
+                      insert_pos = i + 1
+                      break
+              lines.insert(insert_pos, helper)
+              content = ''.join(lines)
+          content = content.replace('with open(os.path.join(module_path, "version.json")) as f:',
+                                    'with open(_get_version_json_path()) as f:')
+          with open(target, 'w') as f:
+              f.write(content)
+          print("Patched", target)
+          EOF
+          python3 patch_init.py
+
       - name: Build for macOS ${{ matrix.arch }}
         run: |
           cd cfclient
           ADD_DATA="--add-data bin:bin --add-data src:src --collect-data cfclient"
-          [ -d "lib" ] && ADD_DATA="$ADD_DATA --add-data lib:lib"
+          ADD_DATA="$ADD_DATA --add-data src/cfclient/version.json:version.json"
           [ -d "resources" ] && ADD_DATA="$ADD_DATA --add-data resources:resources"
           pyinstaller --onefile --windowed --name cfclient $ADD_DATA --hidden-import PyQt5.sip bin/cfclient
           cd dist
@@ -196,12 +281,50 @@ jobs:
             echo '{"version": "dev"}' > src/cfclient/version.json
           fi
 
+      - name: Patch __init__.py for PyInstaller
+        shell: bash
+        run: |
+          cd cfclient
+          cat > patch_init.py << 'EOF'
+          import os, re, sys
+          target = "src/cfclient/__init__.py"
+          with open(target, 'r', encoding='utf-8') as f:
+              content = f.read()
+          old_assign = r'(\s*else:\s*\n\s*)(module_path = os\.path\.join\(os\.path\.dirname\(sys\.executable\), \'lib\', \'cfclient\'\))'
+          new_assign = r'\1if hasattr(sys, \'_MEIPASS\'):\n        module_path = sys._MEIPASS\n    else:\n        module_path = os.path.join(os.path.dirname(sys.executable), \'lib\', \'cfclient\')'
+          content = re.sub(old_assign, new_assign, content, flags=re.MULTILINE)
+          helper = '''
+          def _get_version_json_path():
+              import sys, os
+              if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+                  root_path = os.path.join(sys._MEIPASS, 'version.json')
+                  if os.path.exists(root_path):
+                      return root_path
+              return os.path.join(module_path, 'version.json')
+          '''
+          if '_get_version_json_path' not in content:
+              lines = content.splitlines(keepends=True)
+              insert_pos = 0
+              for i, line in enumerate(lines):
+                  if line.startswith('import ') or line.startswith('from '):
+                      insert_pos = i + 1
+                      break
+              lines.insert(insert_pos, helper)
+              content = ''.join(lines)
+          content = content.replace('with open(os.path.join(module_path, "version.json")) as f:',
+                                    'with open(_get_version_json_path()) as f:')
+          with open(target, 'w', encoding='utf-8') as f:
+              f.write(content)
+          print("Patched", target)
+          EOF
+          python patch_init.py
+
       - name: Build for Windows amd64
         shell: cmd
         run: |
           cd cfclient
           set ADD_DATA=--add-data bin;bin --add-data src;src --collect-data cfclient
-          if exist lib set ADD_DATA=%ADD_DATA% --add-data lib;lib
+          set ADD_DATA=%ADD_DATA% --add-data src/cfclient/version.json;version.json
           if exist resources set ADD_DATA=%ADD_DATA% --add-data resources;resources
           python -m PyInstaller --onefile --name cfclient.exe %ADD_DATA% --hidden-import PyQt5.sip bin/cfclient
           cd dist
