@@ -117,27 +117,22 @@ jobs:
 
       - name: Build executable (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: cmd
         run: |
           cd cfclient
-          $addData = @("--add-data", "bin;bin", "--add-data", "src;src")
-          if (Test-Path "lib") { $addData += "--add-data", "lib;lib" }
-          if (Test-Path "resources") { $addData += "--add-data", "resources;resources" }
-          $pyInstallerArgs = @(
-            "--onefile", "--name", "cfclient.exe",
-            "--hidden-import", "PyQt5.sip",
-            "--"
-          ) + $addData + @("bin/cfclient")
-          python -m PyInstaller $pyInstallerArgs
+          set ADD_DATA=--add-data bin;bin --add-data src;src
+          if exist lib set ADD_DATA=%ADD_DATA% --add-data lib;lib
+          if exist resources set ADD_DATA=%ADD_DATA% --add-data resources;resources
+          python -m PyInstaller --onefile --name cfclient.exe %ADD_DATA% --hidden-import PyQt5.sip bin/cfclient
           cd dist
-          if (Test-Path cfclient.exe) {
-            Compress-Archive -Path cfclient.exe -DestinationPath cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip
-            $artifact_path = Resolve-Path cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip
-            echo "ARTIFACT_PATH=$artifact_path" | Out-File -FilePath $env:GITHUB_ENV -Append
-          } else {
-            Write-Error "cfclient.exe not found"
+          if exist cfclient.exe (
+            echo Creating zip using 7z...
+            "C:\Program Files\7-Zip\7z.exe" a -tzip cfclient-windows-amd64.zip cfclient.exe
+            echo ARTIFACT_PATH=%cd%\cfclient-windows-amd64.zip>> %GITHUB_ENV%
+          ) else (
+            echo cfclient.exe not found
             exit 1
-          }
+          )
 
       - name: Upload artifact (AMD64)
         uses: actions/upload-artifact@v4
