@@ -17,24 +17,13 @@ jobs:
   build_client:
     strategy:
       matrix:
-        # 定义平台和架构的矩阵
-        # 注意：GitHub Actions 支持的 runner 架构有限
         include:
           - os: ubuntu-latest
             platform: linux
-            arch: amd64
-          - os: ubuntu-24.04-arm
-            platform: linux
-            arch: arm64
           - os: macos-latest
             platform: macos
-            arch: amd64   # Intel Mac
-          - os: macos-latest
-            platform: macos
-            arch: arm64   # Apple Silicon (自动选择)
           - os: windows-latest
             platform: windows
-            arch: amd64
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout cfclient (leeebo fork)
@@ -98,9 +87,8 @@ jobs:
           [ -d "lib" ] && ADD_DATA="$ADD_DATA --add-data lib:lib"
           [ -d "resources" ] && ADD_DATA="$ADD_DATA --add-data resources:resources"
           pyinstaller --onefile --name cfclient $ADD_DATA --hidden-import PyQt5.sip bin/cfclient
-          cd dist
-          zip cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip cfclient
-          echo "ARTIFACT_PATH=$(pwd)/cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip" >> $GITHUB_ENV
+          cd dist && zip cfclient-${{ matrix.platform }}-amd64.zip cfclient
+          echo "ARTIFACT_PATH=$(pwd)/cfclient-${{ matrix.platform }}-amd64.zip" >> $GITHUB_ENV
 
       - name: Build executable (macOS)
         if: runner.os == 'macOS'
@@ -110,28 +98,32 @@ jobs:
           [ -d "lib" ] && ADD_DATA="$ADD_DATA --add-data lib:lib"
           [ -d "resources" ] && ADD_DATA="$ADD_DATA --add-data resources:resources"
           pyinstaller --onefile --windowed --name cfclient $ADD_DATA --hidden-import PyQt5.sip bin/cfclient
-          cd dist
-          zip -r cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip cfclient.app
-          echo "ARTIFACT_PATH=$(pwd)/cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip" >> $GITHUB_ENV
+          cd dist && zip -r cfclient-${{ matrix.platform }}-amd64.zip cfclient.app
+          echo "ARTIFACT_PATH=$(pwd)/cfclient-${{ matrix.platform }}-amd64.zip" >> $GITHUB_ENV
 
       - name: Build executable (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: bash
         run: |
           cd cfclient
-          $ADD_DATA = "--add-data bin;bin --add-data src;src"
-          if (Test-Path "lib") { $ADD_DATA += " --add-data lib;lib" }
-          if (Test-Path "resources") { $ADD_DATA += " --add-data resources;resources" }
-          pyinstaller --onefile --name cfclient.exe $ADD_DATA --hidden-import PyQt5.sip "bin/cfclient"
+          ADD_DATA="--add-data bin;bin --add-data src;src"
+          if [ -d "lib" ]; then ADD_DATA="$ADD_DATA --add-data lib;lib"; fi
+          if [ -d "resources" ]; then ADD_DATA="$ADD_DATA --add-data resources;resources"; fi
+          # 关键：使用 python -m PyInstaller 并正确引用脚本路径
+          python -m PyInstaller --onefile --name cfclient.exe $ADD_DATA --hidden-import PyQt5.sip "bin/cfclient"
           cd dist
-          Compress-Archive -Path cfclient.exe -DestinationPath cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip
-          $artifact_path = Resolve-Path cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip
-          echo "ARTIFACT_PATH=$artifact_path" >> $env:GITHUB_ENV
+          if [ -f cfclient.exe ]; then
+            zip cfclient-${{ matrix.platform }}-amd64.zip cfclient.exe
+            echo "ARTIFACT_PATH=$(pwd)/cfclient-${{ matrix.platform }}-amd64.zip" >> $GITHUB_ENV
+          else
+            echo "Build failed: cfclient.exe not found"
+            exit 1
+          fi
 
       - name: Upload client artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cfclient_${{ matrix.platform }}_${{ matrix.arch }}_${{ github.run_number }}
+          name: cfclient_${{ matrix.platform }}_${{ github.run_number }}
           path: ${{ env.ARTIFACT_PATH }}
           if-no-files-found: error
 
@@ -152,12 +144,10 @@ jobs:
           tag_name: ${{ inputs.release_tag || format('client-{0}', github.run_number) }}
           name: "ESP-Drone Client ${{ inputs.release_tag || github.run_number }}"
           body: |
-            ## PC Client Downloads (multi-architecture)
-            - **Linux amd64**: cfclient_linux_amd64_*.zip
-            - **Linux arm64**: cfclient_linux_arm64_*.zip
-            - **macOS Intel**: cfclient_macos_amd64_*.zip
-            - **macOS Apple Silicon**: cfclient_macos_arm64_*.zip
-            - **Windows amd64**: cfclient_windows_amd64_*.zip
+            ## PC Client Downloads
+            - **Linux**: cfclient_linux_*.zip
+            - **macOS**: cfclient_macos_*.zip
+            - **Windows**: cfclient_windows_*.zip
           files: artifacts/**/*.zip
           draft: false
           prerelease: false
