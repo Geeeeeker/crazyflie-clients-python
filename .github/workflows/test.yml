@@ -1,176 +1,124 @@
-name: Build cfclient (Cross-Platform) with Official Docs
+build_client:
+  runs-on: ${{ matrix.os }}
+  needs: generate_docs
+  strategy:
+    matrix:
+      include:
+        - os: ubuntu-latest
+          platform: linux
+        - os: macos-latest
+          platform: macos
+        - os: windows-latest
+          platform: windows
+  steps:
+    - name: Checkout cfclient
+      uses: actions/checkout@v4
+      with:
+        repository: leeebo/crazyflie-clients-python
+        ref: master
+        path: cfclient
+        submodules: 'recursive'
 
-on:
-  workflow_dispatch:
-    inputs:
-      release_tag:
-        description: 'Release tag (leave empty for auto-generate)'
-        required: false
-        default: ''
-      create_release:
-        description: 'Create a GitHub Release and upload artifacts'
-        required: true
-        default: true
-        type: boolean
+    - name: Checkout crazyflie-lib-python
+      uses: actions/checkout@v4
+      with:
+        repository: leeebo/crazyflie-lib-python
+        ref: master
+        path: crazyflie-lib-python
 
-jobs:
-  # 可选：生成 log_param_doc.json
-  generate_docs:
-    runs-on: ubuntu-latest
-    outputs:
-      doc_generated: ${{ steps.check_doc.outputs.doc_generated }}
-    steps:
-      - name: Checkout crazyflie-firmware
-        uses: actions/checkout@v4
-        with:
-          repository: bitcraze/crazyflie-firmware
-          path: firmware
-      - name: Generate doc
-        id: check_doc
-        run: |
-          cd firmware
-          docker run --rm -v ${PWD}:/tb-module bitcraze/toolbelt build-docs || true
-          if [ -f docs/api/log_param_doc.json ]; then
-            echo "doc_generated=true" >> $GITHUB_OUTPUT
-          else
-            echo "doc_generated=false" >> $GITHUB_OUTPUT
-          fi
-      - name: Upload doc
-        uses: actions/upload-artifact@v4
-        with:
-          name: log_param_doc.json
-          path: firmware/docs/api/log_param_doc.json
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
 
-  build_client:
-    runs-on: ${{ matrix.os }}
-    needs: generate_docs
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            platform: linux
-          - os: macos-latest
-            platform: macos
-          - os: windows-latest
-            platform: windows
-    steps:
-      - name: Checkout cfclient (leeebo fork)
-        uses: actions/checkout@v4
-        with:
-          repository: leeebo/crazyflie-clients-python
-          ref: master
-          path: cfclient
-          submodules: 'recursive'
+    - name: Install system deps (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y python3-pyqt5 python3-pyqt5.qtsvg libgl1-mesa-dri libgl1
 
-      - name: Checkout crazyflie-lib-python
-        uses: actions/checkout@v4
-        with:
-          repository: leeebo/crazyflie-lib-python
-          ref: master
-          path: crazyflie-lib-python
+    - name: Install system deps (macOS)
+      if: matrix.os == 'macos-latest'
+      run: brew install pyqt5
 
-      - name: Download generated doc
-        if: needs.generate_docs.outputs.doc_generated == 'true'
-        uses: actions/download-artifact@v4
-        with:
-          name: log_param_doc.json
-          path: cfclient/src/cfclient/resources/
+    - name: Install Python packages (Linux/macOS)
+      if: matrix.os != 'windows-latest'
+      run: |
+        pip install -e ./crazyflie-lib-python
+        if [ -f ./cfclient/requirements.txt ]; then
+          pip install -r ./cfclient/requirements.txt
+        else
+          echo "requirements.txt not found, installing from setup.py"
+          pip install -e ./cfclient
+        fi
+        pip install pyinstaller
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+    - name: Install Python packages (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: bash
+      run: |
+        pip install -e ./crazyflie-lib-python
+        if [ -f ./cfclient/requirements.txt ]; then
+          pip install -r ./cfclient/requirements.txt
+        else
+          echo "requirements.txt not found, installing from setup.py"
+          pip install -e ./cfclient
+        fi
+        pip install pyinstaller
 
-      - name: Install system deps (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-pyqt5 python3-pyqt5.qtsvg libgl1 libxcb-xinerama0
+    - name: Build executable (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        cd cfclient
+        pyinstaller --onefile --name cfclient \
+          --add-data "bin:bin" \
+          --add-data "lib:lib" \
+          --add-data "src:src" \
+          --hidden-import PyQt5.sip \
+          bin/cfclient
+        cd dist && zip -r cfclient-linux-amd64.zip cfclient && echo "artifact_path=$(pwd)/cfclient-linux-amd64.zip" >> $GITHUB_OUTPUT
 
-      - name: Install system deps (macOS)
-        if: matrix.os == 'macos-latest'
-        run: brew install pyqt5
+    - name: Build executable (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        cd cfclient
+        pyinstaller --onefile --windowed --name cfclient \
+          --add-data "bin:bin" \
+          --add-data "lib:lib" \
+          --add-data "src:src" \
+          --hidden-import PyQt5.sip \
+          bin/cfclient
+        cd dist && zip -r cfclient-macos.zip cfclient.app && echo "artifact_path=$(pwd)/cfclient-macos.zip" >> $GITHUB_OUTPUT
 
-      - name: Install Python packages
-        run: |
-          pip install -e ./crazyflie-lib-python
-          # 检查 requirements.txt 是否存在，若不存在则跳过
-          if [ -f ./cfclient/requirements.txt ]; then
-            pip install -r ./cfclient/requirements.txt
-          else
-            echo "requirements.txt not found, installing core deps manually"
-            pip install PyQt5 pyqt5-sip pyserial
-          fi
-          pip install pyinstaller
+    - name: Build executable (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: bash
+      run: |
+        cd cfclient
+        pyinstaller --onefile --name cfclient.exe --add-data "bin;bin" --add-data "lib;lib" --add-data "src;src" --hidden-import PyQt5.sip bin/cfclient
+        cd dist
+        zip -r cfclient-windows.zip cfclient.exe
+        echo "artifact_path=$(pwd)/cfclient-windows.zip" >> $GITHUB_OUTPUT
+      # 注意：Windows 上 zip 命令需要安装，但 GitHub runner 默认有 7zip，可以用 7z 或 zip。这里用 zip 可能没有，改用 powershell compress-archive 更安全，但为了 bash 一致性，可改用 7z。
+      # 更可靠的方式：
+      # powershell Compress-Archive -Path cfclient.exe -DestinationPath cfclient-windows.zip
+      # 但需要切换 shell 到 pwsh。下面单独处理。
 
-      - name: Build executable (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          cd cfclient
-          pyinstaller --onefile --name cfclient \
-            --add-data "bin:bin" \
-            --add-data "lib:lib" \
-            --add-data "src:src" \
-            --hidden-import PyQt5.sip \
-            bin/cfclient
-          cd dist && zip -r cfclient-linux-amd64.zip cfclient && echo "artifact_path=$(pwd)/cfclient-linux-amd64.zip" >> $GITHUB_OUTPUT
+    # 为 Windows 单独使用 PowerShell 打包
+    - name: Build executable (Windows) - alternative
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
+      run: |
+        cd cfclient
+        pyinstaller --onefile --name cfclient.exe --add-data "bin;bin" --add-data "lib;lib" --add-data "src;src" --hidden-import PyQt5.sip bin\cfclient
+        cd dist
+        Compress-Archive -Path cfclient.exe -DestinationPath cfclient-windows.zip
+        $artifact_path = Resolve-Path cfclient-windows.zip
+        echo "artifact_path=$artifact_path" >> $env:GITHUB_OUTPUT
 
-      - name: Build executable (macOS)
-        if: matrix.os == 'macos-latest'
-        run: |
-          cd cfclient
-          pyinstaller --onefile --windowed --name cfclient \
-            --add-data "bin:bin" \
-            --add-data "lib:lib" \
-            --add-data "src:src" \
-            --hidden-import PyQt5.sip \
-            bin/cfclient
-          cd dist && zip -r cfclient-macos.zip cfclient.app && echo "artifact_path=$(pwd)/cfclient-macos.zip" >> $GITHUB_OUTPUT
-
-      - name: Build executable (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          cd cfclient
-          pyinstaller --onefile --name cfclient.exe --add-data "bin;bin" --add-data "lib;lib" --add-data "src;src" --hidden-import PyQt5.sip bin\cfclient
-          cd dist
-          Compress-Archive -Path cfclient.exe -DestinationPath cfclient-windows.zip
-          $artifact_path = Resolve-Path cfclient-windows.zip
-          echo "artifact_path=$artifact_path" >> $env:GITHUB_OUTPUT
-
-      - name: Upload client artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: cfclient_${{ matrix.platform }}_${{ github.run_number }}
-          path: ${{ steps.build.outputs.artifact_path }}
-          if-no-files-found: error
-
-  release:
-    runs-on: ubuntu-latest
-    needs: build_client
-    if: inputs.create_release == true
-    permissions:
-      contents: write
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ inputs.release_tag || format('client-{0}', github.run_number) }}
-          name: "ESP-Drone Client ${{ inputs.release_tag || github.run_number }}"
-          body: |
-            ## PC Client Downloads
-            - **Linux**: cfclient_linux_*.zip
-            - **macOS**: cfclient_macos_*.zip
-            - **Windows**: cfclient_windows_*.zip
-          files: |
-            artifacts/cfclient_linux_*/cfclient-linux-*.zip
-            artifacts/cfclient_macos_*/cfclient-macos-*.zip
-            artifacts/cfclient_windows_*/cfclient-windows-*.zip
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Upload client artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: cfclient_${{ matrix.platform }}_${{ github.run_number }}
+        path: ${{ steps.build.outputs.artifact_path }}
+        if-no-files-found: error
