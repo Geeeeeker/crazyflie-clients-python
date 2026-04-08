@@ -14,9 +14,8 @@ on:
         type: boolean
 
 jobs:
-  # 生成 log_param_doc.json（来自官方 crazyflie-firmware）
   generate_docs:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04   # 固定使用 22.04 以避免依赖问题
     outputs:
       doc_generated: ${{ steps.check_doc.outputs.doc_generated }}
     steps:
@@ -26,7 +25,7 @@ jobs:
           repository: bitcraze/crazyflie-firmware
           path: firmware
 
-      - name: Generate log_param_doc.json using toolbelt
+      - name: Generate log_param_doc.json
         id: check_doc
         run: |
           cd firmware
@@ -43,20 +42,19 @@ jobs:
             echo "doc_generated=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Upload doc artifact (for debugging)
+      - name: Upload doc artifact
         uses: actions/upload-artifact@v4
         with:
           name: log_param_doc.json
           path: firmware/docs/api/log_param_doc.json
 
-  # 跨平台客户端打包
   build_client:
     runs-on: ${{ matrix.os }}
-    needs: generate_docs   # 可选，如果不需要文档可以移除
+    needs: generate_docs
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04        # 显式使用 22.04
             platform: linux
           - os: macos-latest
             platform: macos
@@ -78,7 +76,7 @@ jobs:
           ref: master
           path: crazyflie-lib-python
 
-      - name: Download generated doc (if any)
+      - name: Download generated doc
         if: needs.generate_docs.outputs.doc_generated == 'true'
         uses: actions/download-artifact@v4
         with:
@@ -91,8 +89,12 @@ jobs:
           python-version: '3.11'
 
       - name: Install system deps (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: sudo apt-get update && sudo apt-get install -y python3-pyqt5 python3-pyqt5.qtsvg libgl1-mesa-glx
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pyqt5 python3-pyqt5.qtsvg || true
+          # 尝试安装 libgl1-mesa-glx，如果失败则安装 libgl1
+          sudo apt-get install -y libgl1-mesa-glx || sudo apt-get install -y libgl1
 
       - name: Install system deps (macOS)
         if: matrix.os == 'macos-latest'
@@ -105,7 +107,7 @@ jobs:
           pip install pyinstaller
 
       - name: Build executable (Linux)
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           cd cfclient
           pyinstaller --onefile --name cfclient \
@@ -146,9 +148,8 @@ jobs:
           path: ${{ steps.build.outputs.artifact_path }}
           if-no-files-found: error
 
-  # 发布到 GitHub Release
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     needs: build_client
     if: inputs.create_release == true
     permissions:
@@ -158,7 +159,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -169,8 +169,6 @@ jobs:
             - **Linux**: cfclient_linux_*.zip
             - **macOS**: cfclient_macos_*.zip
             - **Windows**: cfclient_windows_*.zip
-
-            Built from [leeebo/crazyflie-clients-python](https://github.com/leeebo/crazyflie-clients-python) `master` branch.
           files: |
             artifacts/cfclient_linux_*/cfclient-linux-*.zip
             artifacts/cfclient_macos_*/cfclient-macos-*.zip
