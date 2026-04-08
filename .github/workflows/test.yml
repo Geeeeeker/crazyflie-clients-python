@@ -24,7 +24,6 @@ on:
         type: boolean
 
 jobs:
-  # ========== AMD64 构建 ==========
   build_amd64:
     if: inputs.build_amd64 == true
     strategy:
@@ -118,17 +117,21 @@ jobs:
 
       - name: Build executable (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: bash
         run: |
           cd cfclient
-          $ADD_DATA = "--add-data bin;bin --add-data src;src"
-          if (Test-Path "lib") { $ADD_DATA += " --add-data lib;lib" }
-          if (Test-Path "resources") { $ADD_DATA += " --add-data resources;resources" }
+          ADD_DATA="--add-data bin;bin --add-data src;src"
+          if [ -d "lib" ]; then ADD_DATA="$ADD_DATA --add-data lib;lib"; fi
+          if [ -d "resources" ]; then ADD_DATA="$ADD_DATA --add-data resources;resources"; fi
           python -m PyInstaller --onefile --name cfclient.exe $ADD_DATA --hidden-import PyQt5.sip "bin/cfclient"
           cd dist
-          Compress-Archive -Path cfclient.exe -DestinationPath cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip
-          $artifact_path = Resolve-Path cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip
-          echo "ARTIFACT_PATH=$artifact_path" >> $env:GITHUB_OUTPUT
+          if [ -f cfclient.exe ]; then
+            zip cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip cfclient.exe
+            echo "ARTIFACT_PATH=$(pwd)/cfclient-${{ matrix.platform }}-${{ matrix.arch }}.zip" >> $GITHUB_ENV
+          else
+            echo "Build failed: cfclient.exe not found"
+            exit 1
+          fi
 
       - name: Upload artifact (AMD64)
         uses: actions/upload-artifact@v4
@@ -137,7 +140,6 @@ jobs:
           path: ${{ env.ARTIFACT_PATH }}
           if-no-files-found: error
 
-  # ========== ARM64 构建 ==========
   build_arm64:
     if: inputs.build_arm64 == true
     strategy:
@@ -150,7 +152,7 @@ jobs:
             platform: macos
             arch: arm64
     runs-on: ${{ matrix.os }}
-    continue-on-error: true   # 如果 ARM runner 不可用，不会使整个工作流失败
+    continue-on-error: true
     steps:
       - name: Checkout cfclient
         uses: actions/checkout@v4
@@ -221,7 +223,6 @@ jobs:
           path: ${{ env.ARTIFACT_PATH }}
           if-no-files-found: error
 
-  # ========== 发布到 Release ==========
   release:
     runs-on: ubuntu-latest
     needs: [build_amd64, build_arm64]
