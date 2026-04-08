@@ -88,7 +88,7 @@ jobs:
           [ -d "resources" ] && ADD_DATA="$ADD_DATA --add-data resources:resources"
           pyinstaller --onefile --name cfclient $ADD_DATA --hidden-import PyQt5.sip bin/cfclient
           cd dist && zip -r cfclient-linux-amd64.zip cfclient
-          echo "artifact_path=$(pwd)/cfclient-linux-amd64.zip" >> $GITHUB_OUTPUT
+          echo "ARTIFACT_PATH=$(pwd)/cfclient-linux-amd64.zip" >> $GITHUB_ENV
 
       - name: Build executable (macOS)
         if: matrix.os == 'macos-latest'
@@ -99,7 +99,7 @@ jobs:
           [ -d "resources" ] && ADD_DATA="$ADD_DATA --add-data resources:resources"
           pyinstaller --onefile --windowed --name cfclient $ADD_DATA --hidden-import PyQt5.sip bin/cfclient
           cd dist && zip -r cfclient-macos.zip cfclient.app
-          echo "artifact_path=$(pwd)/cfclient-macos.zip" >> $GITHUB_OUTPUT
+          echo "ARTIFACT_PATH=$(pwd)/cfclient-macos.zip" >> $GITHUB_ENV
 
       - name: Build executable (Windows)
         if: matrix.os == 'windows-latest'
@@ -109,18 +109,21 @@ jobs:
           ADD_DATA="--add-data bin;bin --add-data src;src"
           if [ -d "lib" ]; then ADD_DATA="$ADD_DATA --add-data lib;lib"; fi
           if [ -d "resources" ]; then ADD_DATA="$ADD_DATA --add-data resources;resources"; fi
-          # 使用正斜杠并加引号防止路径被拆分
           pyinstaller --onefile --name cfclient.exe $ADD_DATA --hidden-import PyQt5.sip "bin/cfclient"
           cd dist
-          # 使用 zip 命令（Git Bash 自带）代替 Compress-Archive
-          zip -r cfclient-windows.zip cfclient.exe
-          echo "artifact_path=$(pwd)/cfclient-windows.zip" >> $GITHUB_OUTPUT
+          if [ -f cfclient.exe ]; then
+            zip cfclient-windows.zip cfclient.exe
+            echo "ARTIFACT_PATH=$(pwd)/cfclient-windows.zip" >> $GITHUB_ENV
+          else
+            echo "cfclient.exe not found!"
+            exit 1
+          fi
 
       - name: Upload client artifact
         uses: actions/upload-artifact@v4
         with:
           name: cfclient_${{ matrix.platform }}_${{ github.run_number }}
-          path: ${{ steps.build.outputs.artifact_path }}
+          path: ${{ env.ARTIFACT_PATH }}
           if-no-files-found: error
 
   release:
