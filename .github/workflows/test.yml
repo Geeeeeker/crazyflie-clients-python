@@ -14,8 +14,9 @@ on:
         type: boolean
 
 jobs:
+  # 可选：生成 log_param_doc.json
   generate_docs:
-    runs-on: ubuntu-22.04   # 固定使用 22.04 以避免依赖问题
+    runs-on: ubuntu-latest
     outputs:
       doc_generated: ${{ steps.check_doc.outputs.doc_generated }}
     steps:
@@ -24,25 +25,17 @@ jobs:
         with:
           repository: bitcraze/crazyflie-firmware
           path: firmware
-
-      - name: Generate log_param_doc.json
+      - name: Generate doc
         id: check_doc
         run: |
           cd firmware
-          docker run --rm -e "HOST_CW_DIR=${PWD}" \
-            -e "CALLING_HOST_NAME=$(hostname)" \
-            -e "CALLING_UID=$UID" \
-            -e "CALLING_OS=$(uname)" \
-            -v ${PWD}:/tb-module \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            bitcraze/toolbelt build-docs
+          docker run --rm -v ${PWD}:/tb-module bitcraze/toolbelt build-docs || true
           if [ -f docs/api/log_param_doc.json ]; then
             echo "doc_generated=true" >> $GITHUB_OUTPUT
           else
             echo "doc_generated=false" >> $GITHUB_OUTPUT
           fi
-
-      - name: Upload doc artifact
+      - name: Upload doc
         uses: actions/upload-artifact@v4
         with:
           name: log_param_doc.json
@@ -54,7 +47,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-22.04        # 显式使用 22.04
+          - os: ubuntu-latest
             platform: linux
           - os: macos-latest
             platform: macos
@@ -89,12 +82,10 @@ jobs:
           python-version: '3.11'
 
       - name: Install system deps (Linux)
-        if: matrix.os == 'ubuntu-22.04'
+        if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-pyqt5 python3-pyqt5.qtsvg || true
-          # 尝试安装 libgl1-mesa-glx，如果失败则安装 libgl1
-          sudo apt-get install -y libgl1-mesa-glx || sudo apt-get install -y libgl1
+          sudo apt-get install -y python3-pyqt5 python3-pyqt5.qtsvg libgl1 libxcb-xinerama0
 
       - name: Install system deps (macOS)
         if: matrix.os == 'macos-latest'
@@ -103,11 +94,17 @@ jobs:
       - name: Install Python packages
         run: |
           pip install -e ./crazyflie-lib-python
-          pip install -r ./cfclient/requirements.txt
+          # 检查 requirements.txt 是否存在，若不存在则跳过
+          if [ -f ./cfclient/requirements.txt ]; then
+            pip install -r ./cfclient/requirements.txt
+          else
+            echo "requirements.txt not found, installing core deps manually"
+            pip install PyQt5 pyqt5-sip pyserial
+          fi
           pip install pyinstaller
 
       - name: Build executable (Linux)
-        if: matrix.os == 'ubuntu-22.04'
+        if: matrix.os == 'ubuntu-latest'
         run: |
           cd cfclient
           pyinstaller --onefile --name cfclient \
@@ -149,7 +146,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     needs: build_client
     if: inputs.create_release == true
     permissions:
