@@ -24,7 +24,7 @@ jobs:
             arch: amd64
           - runner: ubuntu-24.04-arm
             arch: arm64
-    continue-on-error: ${{ matrix.arch == 'arm64' }}   # 如果 ARM runner 不可用，跳过
+    continue-on-error: ${{ matrix.arch == 'arm64' }}
     steps:
       - name: Checkout cfclient
         uses: actions/checkout@v4
@@ -61,6 +61,13 @@ jobs:
           fi
           pip install pyinstaller
 
+      - name: Generate version.json (if missing)
+        run: |
+          cd cfclient
+          if [ ! -f src/cfclient/version.json ]; then
+            echo '{"version": "dev"}' > src/cfclient/version.json
+          fi
+
       - name: Build for Linux ${{ matrix.arch }}
         run: |
           cd cfclient
@@ -85,9 +92,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - runner: macos-13        # Intel
+          - runner: macos-13
             arch: amd64
-          - runner: macos-latest    # Apple Silicon
+          - runner: macos-latest
             arch: arm64
     steps:
       - name: Checkout cfclient
@@ -120,6 +127,13 @@ jobs:
             pip install -e ./cfclient
           fi
           pip install pyinstaller
+
+      - name: Generate version.json (if missing)
+        run: |
+          cd cfclient
+          if [ ! -f src/cfclient/version.json ]; then
+            echo '{"version": "dev"}' > src/cfclient/version.json
+          fi
 
       - name: Build for macOS ${{ matrix.arch }}
         run: |
@@ -173,6 +187,14 @@ jobs:
             pip install -e ./cfclient
           fi
           pip install pyinstaller
+
+      - name: Generate version.json (if missing)
+        shell: bash
+        run: |
+          cd cfclient
+          if [ ! -f src/cfclient/version.json ]; then
+            echo '{"version": "dev"}' > src/cfclient/version.json
+          fi
 
       - name: Build for Windows amd64
         shell: cmd
